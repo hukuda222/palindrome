@@ -4,8 +4,6 @@ import { marked } from 'marked';
 
 
 const MODELS = {
-  "phi3": { name: "phi3", path: "microsoft/Phi-3-mini-4k-instruct-onnx-web", externaldata: true },
-  "phi3dev": { name: "phi3dev", path: "schmuell/Phi-3-mini-4k-instruct-onnx-web", externaldata: true },
   "hiragana": { name: "hiragana", path: "hukuda222/hiragana-gpt2-xsmall", externaldata: true },
   "hiragana-rev": { name: "hiragana-rev", path: "hukuda222/hiragana-reverse-gpt2-xsmall", externaldata: true },
 }

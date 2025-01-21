@@ -232,7 +232,6 @@ export class LLM {
         this.stop = false;
 
         this.output_tokens.push(...input_ids_forward.data);
-        console.log(this.output_tokens);
 
         let last_token = 0;
         let seqlen = this.output_tokens.length;
@@ -267,12 +266,10 @@ export class LLM {
 
             this.output_tokens.push(last_token);
             if (callback && !this.profiler) {
-                console.log([...this.output_tokens, ...this.output_tokens.reverse().slice(1)]);
                 callback([...this.output_tokens, ...this.output_tokens.reverse().slice(1)]);
             }
             this.update_kv_cache(feed_forward, outputs_forward);
             this.update_kv_cache(feed_backward, outputs_backward);
-            console.log(this.output_tokens);
             feed_forward['input_ids'] = new ort.Tensor('int64', BigInt64Array.from(this.output_tokens), [1, seqlen + 1]);
             feed_backward['input_ids'] = new ort.Tensor('int64', BigInt64Array.from([BigInt(5), ...this.output_tokens.slice(1)]), [1, seqlen + 1]);
             if (this.need_position_ids) {
