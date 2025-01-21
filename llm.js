@@ -242,7 +242,6 @@ export class LLM {
             feed_backward['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: input_len }, (_, i) => BigInt(seqlen - input_len + i)), [1, input_len]);
         }
         let tri_block_dict = new Map();
-        let step = 0
         while (seqlen < max_tokens && !this.stop) {
             seqlen = this.output_tokens.length;
             feed_forward['attention_mask'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen }, () => 1n), [1, seqlen]);
@@ -266,7 +265,8 @@ export class LLM {
 
             this.output_tokens.push(last_token);
             if (callback && !this.profiler) {
-                callback([...this.output_tokens, ...this.output_tokens.reverse().slice(1)]);
+                const temp_output = [...this.output_tokens, ...[...this.output_tokens].reverse().slice(1)];
+                callback(temp_output);
             }
             this.update_kv_cache(feed_forward, outputs_forward);
             this.update_kv_cache(feed_backward, outputs_backward);
@@ -276,11 +276,12 @@ export class LLM {
                 feed_forward['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen + 1 }, (_, i) => BigInt(i)), [1, seqlen + 1]);
                 feed_backward['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen + 1 }, (_, i) => BigInt(i)), [1, seqlen + 1]);
             }
-            step += 1
         }
         if (this.profiler) {
             this.sess.endProfiling();
         }
-        return [...this.output_tokens, ...this.output_tokens.reverse().slice(1)];
+        const output = [...this.output_tokens, ...[...this.output_tokens].reverse().slice(1)];
+        console.log(output);
+        return output;
     }
 }
