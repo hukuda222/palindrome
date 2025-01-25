@@ -17,7 +17,8 @@
   <div class="container">
     <div class="row pt-3">
       <div class="col-md-8 col-12">
-        <h2>Palindrome</h2>
+        <h2>回文生成サービス</h2>
+        <h4>ひらがな言語モデル(GPT2-xsmall)で入力されたテキストから始まる回文を生成します。WASMで動いているので、端末によっては生成まで時間がかかります。</h4>
       </div>
       <div id="status">
       </div>
@@ -33,7 +34,9 @@
   <div class="container p-0 card" id="input-area">
     <div class="input-group">
       <textarea class="form-control" id="user-input" placeholder="Type prefix text."></textarea>
-      <textarea class="form-control" id="user-input-num" placeholder="Type generate num.">10</textarea>
+      <textarea class="form-control" id="user-input-num" placeholder="Type generate num."></textarea>
+      <textarea class="form-control" id="user-input-beam-size" placeholder="Type beam size."></textarea>
+      <textarea class="form-control" id="user-input-temp" placeholder="Type Temprature."></textarea>
       <button id="send-button" class="btn btn-primary">Send</button>
     </div>
   </div>

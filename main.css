@@ -49,11 +49,16 @@ body {
 }
 
 #input-area {
+  resize: none;
   position: fixed;
   bottom: 0;
-  margin-bottom: 5px;
+  margin-bottom: 10px;
   left: 50%;
   transform: translateX(-50%);
+}
+
+#user-input-beam-size {
+  resize: none;
 }
 
 #user-input-num {
@@ -62,5 +67,5 @@ body {
 
 #user-input {
   resize: none;
-  width: 70%;
+  width: 50%;
 }
