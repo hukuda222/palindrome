@@ -32211,7 +32211,7 @@ async function submitRequest(e) {
   }
   let generate_beam_size = parseInt(document.getElementById('user-input-beam-size').value, 10);
   if (isNaN(generate_beam_size)) {
-    generate_beam_size = 10;
+    generate_beam_size = 2;
   }
   let temperature = parseFloat(document.getElementById('user-input-temp').value, 10);
   if (isNaN(temperature)) {
@@ -32219,7 +32219,7 @@ async function submitRequest(e) {
   }
 
   if (input.length == 0) {
-    return;
+    input = "";
   }
   let context = document.getElementById('chat-history').context;
   if (context === undefined) {
