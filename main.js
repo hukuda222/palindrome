@@ -1538,7 +1538,7 @@ class LLM {
                 for (let c of candidates) {
                     const newBeam = b.clone();
                     newBeam.tokens.push(BigInt(c.token));
-                    newBeam.score = newBeam.score + c.score;
+                    newBeam.score = Number(await this.computePerplexityForward([...newBeam.tokens, ...[...newBeam.tokens].reverse().slice(1)]));//newBeam.score + c.score;
                     if (seqlen >= 2) {
                         const key2 = `${b.tokens[seqlen - 2]},${b.tokens[seqlen - 1]}`;
                         if (!newBeam.tri_block_dict.has(key2)) {
@@ -1585,7 +1585,8 @@ class LLM {
             }
 
             newBeams.sort((a, b) => b.score - a.score);
-            final_outputs.push({ beam: newBeams[0], score: Number(await this.computePerplexityForward([...newBeams[0].tokens, ...[...newBeams[0].tokens].reverse().slice(1)])) });
+            //final_outputs.push({ beam: newBeams[0], score: Number(await this.computePerplexityForward([...newBeams[0].tokens, ...[...newBeams[0].tokens].reverse().slice(1)])) });
+            final_outputs.push(newBeams[0]);
             beams = newBeams.slice(0, beam_size);
 
             if (callback && !this.profiler) {
