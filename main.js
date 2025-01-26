@@ -32262,8 +32262,6 @@ async function submitRequest(e) {
     spinner.remove();
   });
 
-  // Clear user input
-  document.getElementById('user-input').value = '';
 }
 
 
