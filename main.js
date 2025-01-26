@@ -1317,7 +1317,7 @@ class LLM {
             if (block_ids.includes(i)) {
                 scores.push({ token: i, score: Number.NEGATIVE_INFINITY });
             } else {
-                const val = arrF[start + i] + arrB[start + i];
+                const val = Math.min(arrF[start + i], arrB[start + i]);
                 if (!isFinite(val)) {
                     throw new Error("found infinite in logits");
                 }
@@ -1481,8 +1481,18 @@ class LLM {
         feed_forward_init['input_ids'] = input_ids_forward;
         feed_backward_init['input_ids'] = input_ids_backward;
 
+        let default_tri_block_dict = new Map()
+        for (let i = 2; i < tokens.length; i++) {
+            const key2 = `${tokens[i - 2]},${tokens[i - 1]}`;
+            if (!default_tri_block_dict.has(key2)) {
+                default_tri_block_dict.set(key2, [tokens[i]]);
+            } else {
+                default_tri_block_dict.get(key2).push(tokens[i]);
+            }
+        }
+
         const initTokens = BigInt64Array.from(([2].concat(tokens)).map(BigInt));
-        const beam = new BeamState(initTokens, feed_forward_init, feed_backward_init);
+        const beam = new BeamState(initTokens, feed_forward_init, feed_backward_init, -1000, default_tri_block_dict);
 
         let beams = [beam];
 
@@ -1501,7 +1511,6 @@ class LLM {
             );
         }
         let final_outputs = []
-
         while (!this.stop) {
             let newBeams = [];
 
