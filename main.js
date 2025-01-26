@@ -1342,8 +1342,8 @@ class LLM {
         }
 
         let results = [];
+        const sumExp = computeExpVals(scores);
         for (let round = 0; round < k; round++) {
-            let sumExp = computeExpVals(scores);
 
             if (sumExp === 0 || scores.length === 0) {
                 break;
@@ -1534,7 +1534,7 @@ class LLM {
                     }
                 }
 
-                const candidates = this.topKSamplingWithoutReplacement(outputs_forward.logits, outputs_backward.logits, block_ids, beam_size * 2, temperature);
+                const candidates = this.topKSamplingWithoutReplacement(outputs_forward.logits, outputs_backward.logits, block_ids, beam_size, temperature);
                 for (let c of candidates) {
                     const newBeam = b.clone();
                     newBeam.tokens.push(BigInt(c.token));
