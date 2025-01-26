@@ -80,9 +80,21 @@ async function submitRequest(e) {
   document.getElementById('chat-container').style.display = 'block';
 
   let input = document.getElementById('user-input').value;
-  let generate_num = document.getElementById('user-input-num').value;
+  let generate_num = parseInt(document.getElementById('user-input-num').value, 10);
+  if (isNaN(generate_num)) {
+    generate_num = 10;
+  }
+  let generate_beam_size = parseInt(document.getElementById('user-input-beam-size').value, 10);
+  if (isNaN(generate_beam_size)) {
+    generate_beam_size = 10;
+  }
+  let temperature = parseFloat(document.getElementById('user-input-temp').value, 10);
+  if (isNaN(temperature)) {
+    temperature = 0.0;
+  }
+
   if (input.length == 0) {
-    return;
+    input = "";
   }
   let context = document.getElementById('chat-history').context;
   if (context === undefined) {
@@ -112,7 +124,7 @@ async function submitRequest(e) {
   // change autoScroller to keep track of our new responseDiv
   autoScroller.observe(responseDiv);
 
-  Query(input, generate_num, (word) => {
+  Query(input, generate_num, generate_beam_size, temperature, (word) => {
     responseDiv.innerHTML = marked.parse(word);
   }).then(() => {
     chatHistory.context = responseDiv.innerHTML;
@@ -125,8 +137,6 @@ async function submitRequest(e) {
     spinner.remove();
   });
 
-  // Clear user input
-  document.getElementById('user-input').value = '';
 }
 
 
@@ -206,7 +216,7 @@ function token_to_text(tokens, startidx) {
   return txt;
 }
 
-async function Query(query, generate_num, cb) {
+async function Query(query, generate_num, generate_beam_size, temperature, cb) {
   let prompt = query;
 
   const input_ids = prompt.split("").map(x => x in char2index ? char2index[x] : 6); //await tokenizer(prompt, { return_tensor: false, padding: true, truncation: true });
@@ -216,7 +226,7 @@ async function Query(query, generate_num, cb) {
 
   const start_timer = performance.now();
   const output_index = llm.output_tokens.length + input_ids.length - 1;
-  const output_tokens = await llm.generate(input_ids, generate_num, (output_tokens) => {
+  const output_tokens = await llm.generate(input_ids, generate_num, generate_beam_size, temperature, (output_tokens) => {
     cb(token_to_text(output_tokens, 0));
   }, { max_tokens: config_forward.max_tokens });
 

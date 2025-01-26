@@ -2,7 +2,7 @@ import * as ort from 'onnxruntime-web/webgpu';
 
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.simd = true;
-ort.env.wasm.wasmPaths = document.location.pathname.replace('index.html', '') + 'dist/';
+ort.env.wasm.wasmPaths = document.location.pathname.replace('index.html', '');// + 'dist/';
 
 
 function log(i) { console.log(i); document.getElementById('status').innerText += `\n${i}`; }
@@ -33,6 +33,31 @@ async function fetchAndCache(url) {
     }
 }
 
+
+class BeamState {
+    constructor(tokens, feedForward, feedBackward, score = -1000, tri_block_dict = new Map()) {
+        this.tokens = tokens;
+        this.feedForward = feedForward;
+        this.feedBackward = feedBackward;
+        this.score = score;
+        this.tri_block_dict = tri_block_dict;
+    }
+
+    clone() {
+        const newFeedF = { ...this.feedForward };
+        const newFeedB = { ...this.feedBackward };
+
+        return new BeamState(
+            [...this.tokens],
+            newFeedF,
+            newFeedB,
+            this.score,
+            new Map(Array.from(this.tri_block_dict.entries(), ([k, v]) => [k, [...v]]))
+        );
+    }
+
+}
+
 //
 // class to handle a large language model on top of onnxruntime-web
 //
@@ -54,7 +79,7 @@ export class LLM {
 
     async load(model_forward, options_forward, model_backward, options_backward) {
         ///////////////////
-        const provider_forward = options_forward.provider || "webgpu";
+        const provider_forward = "wasm";//options_forward.provider || "webgpu";
         const local_forward = options_forward.local;
         const hasFP16_forward = (provider_forward === "wasm") ? false : options_forward.hasFP16;
         this.profiler = options_forward.profiler_forward;
@@ -96,7 +121,7 @@ export class LLM {
         this.sess_forward = await ort.InferenceSession.create(model_bytes_forward, opt_forward);
         ///////////////////////
 
-        const provider_backward = options_backward.provider || "webgpu";
+        const provider_backward = "wasm";//options_backward.provider || "webgpu";
         const local_backward = options_backward.local;
         const hasFP16_backward = (provider_backward === "wasm") ? false : options_backward.hasFP16;
 
@@ -192,6 +217,143 @@ export class LLM {
         return maxidx;
     }
 
+    topKSamplingWithoutReplacement(
+        logits_forward,
+        logits_backward,
+        block_ids,
+        k,
+        temperature,
+    ) {
+        const arrF = logits_forward.data;
+        const arrB = logits_backward.data;
+
+        const seq_len = logits_forward.dims[1];
+        const vocab_size = logits_forward.dims[2];
+        const start = vocab_size * (seq_len - 1);
+
+        let scores = [];
+        for (let i = 0; i < vocab_size; i++) {
+            if (block_ids.includes(i)) {
+                scores.push({ token: i, score: Number.NEGATIVE_INFINITY });
+            } else {
+                const val = Math.min(arrF[start + i], arrB[start + i]);
+                if (!isFinite(val)) {
+                    throw new Error("found infinite in logits");
+                }
+                scores.push({ token: i, score: val });
+            }
+        }
+
+        scores.sort((a, b) => b.score - a.score);
+        if (temperature < 0.001) {
+            return scores.slice(0, k);
+        }
+
+        function computeExpVals(array) {
+            const maxLogit = array[0].score / temperature;
+            let sumExp = 0;
+            for (let i = 0; i < array.length; i++) {
+                const scaled = array[i].score / temperature;
+                array[i].expVal = Math.exp(scaled - maxLogit);
+                sumExp += array[i].expVal;
+            }
+            return sumExp;
+        }
+
+        let results = [];
+        const sumExp = computeExpVals(scores);
+        for (let round = 0; round < k; round++) {
+
+            if (sumExp === 0 || scores.length === 0) {
+                break;
+            }
+
+            let r = Math.random() * sumExp;
+            let chosenIndex = 0;
+            for (let i = 0; i < scores.length; i++) {
+                if (r < scores[i].expVal) {
+                    chosenIndex = i;
+                    break;
+                }
+                r -= scores[i].expVal;
+            }
+
+            results.push({
+                token: scores[chosenIndex].token,
+                score: scores[chosenIndex].score
+            });
+            scores.splice(chosenIndex, 1);
+        }
+
+        return results;
+    }
+
+    async computePerplexityForward(tokens) {
+        const input_ids = [2].concat(tokens);
+        const seq_len = input_ids.length;
+
+        let ppl_feed_forward = {};
+        // モデル入力用のTensorに変換
+        ppl_feed_forward['input_ids'] = new ort.Tensor(
+            'int64',
+            BigInt64Array.from(input_ids.map(BigInt)),
+            [1, seq_len]
+        );
+
+        // position_ids, attention_maskなど必要に応じて設定
+        if (this.need_position_ids) {
+            ppl_feed_forward['position_ids'] = new ort.Tensor(
+                'int64',
+                BigInt64Array.from({ length: seq_len }, (_, i) => BigInt(i)),
+                [1, seq_len]
+            );
+        }
+        ppl_feed_forward['attention_mask'] = new ort.Tensor(
+            'int64',
+            BigInt64Array.from({ length: seq_len }, () => 1n),
+            [1, seq_len]
+        );
+
+        // 1回だけ推論してすべてのlogitsを取得
+        const outputs = await this.sess_forward.run(ppl_feed_forward);
+        const logits = outputs.logits; // [1, seq_len, vocab_size]
+        const arr = logits.data;
+        const vocab_size = logits.dims[2];
+
+        let totalNLL = 0.0;
+        let count = 0;
+
+        // ループは seq_len - 1 回 (直前トークン => 次トークンの予測確率)
+        for (let t = 0; t < seq_len - 1; t++) {
+            const start = t * vocab_size;
+            const nextTokenId = input_ids[t + 1];
+
+            // 数値安定のための log-sum-exp
+            // 1) 行の最大値
+            let maxLogit = -Infinity;
+            const row = arr.subarray(start, start + vocab_size);
+            for (const val of row) {
+                if (val > maxLogit) maxLogit = val;
+            }
+
+            // 2) sumExp
+            let sumExp = 0.0;
+            for (const val of row) {
+                sumExp += Math.exp(val - maxLogit);
+            }
+
+            const logSumExp = maxLogit + Math.log(sumExp);
+            const logProbNext = row[nextTokenId] - logSumExp; // log-softmax
+
+            totalNLL += -1 * logProbNext;
+            count++;
+        }
+
+        const avgNLL = totalNLL / count;
+        const ppl = Math.exp(avgNLL);
+        return ppl;
+    }
+
     //
     // update key value cache
     //
@@ -220,68 +382,158 @@ export class LLM {
     // prefill prompt and generate tokens, greedy search only
     //
 
-
-    async generate(tokens, generate_num, callback) {
+    async generate(
+        tokens,
+        generate_num,
+        beam_size,
+        temperature,
+        callback,
+    ) {
         const max_tokens = generate_num;
-        const feed_forward = this.feed_forward;
-        const feed_backward = this.feed_backward;
-        const input_ids_forward = new ort.Tensor('int64', BigInt64Array.from(([2].concat(tokens)).map(BigInt)), [1, tokens.length + 1]);
-        const input_ids_backward = new ort.Tensor('int64', BigInt64Array.from(([5].concat(tokens)).map(BigInt)), [1, tokens.length + 1]);
-        feed_forward['input_ids'] = input_ids_forward;
-        feed_backward['input_ids'] = input_ids_backward;
         this.stop = false;
 
-        this.output_tokens.push(...input_ids_forward.data);
+        const feed_forward_init = { ...this.feed_forward };
+        const feed_backward_init = { ...this.feed_backward };
 
-        let last_token = 0;
-        let seqlen = this.output_tokens.length;
-        const input_len = input_ids_forward.size;
+        const input_ids_forward = new ort.Tensor('int64', BigInt64Array.from(([2].concat(tokens)).map(BigInt)), [1, tokens.length + 1]);
+        const input_ids_backward = new ort.Tensor('int64', BigInt64Array.from(([5].concat(tokens)).map(BigInt)), [1, tokens.length + 1]);
+        feed_forward_init['input_ids'] = input_ids_forward;
+        feed_backward_init['input_ids'] = input_ids_backward;
 
-        if (this.need_position_ids) {
-            feed_forward['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: input_len }, (_, i) => BigInt(seqlen - input_len + i)), [1, input_len]);
-            feed_backward['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: input_len }, (_, i) => BigInt(seqlen - input_len + i)), [1, input_len]);
+        let default_tri_block_dict = new Map()
+        for (let i = 2; i < tokens.length; i++) {
+            const key2 = `${tokens[i - 2]},${tokens[i - 1]}`;
+            if (!default_tri_block_dict.has(key2)) {
+                default_tri_block_dict.set(key2, [tokens[i]]);
+            } else {
+                default_tri_block_dict.get(key2).push(tokens[i]);
+            }
         }
-        let tri_block_dict = new Map();
-        while (seqlen < max_tokens && !this.stop) {
-            seqlen = this.output_tokens.length;
-            feed_forward['attention_mask'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen }, () => 1n), [1, seqlen]);
-            feed_backward['attention_mask'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen }, () => 1n), [1, seqlen]);
-            const outputs_forward = await this.sess_forward.run(feed_forward);
-            const outputs_backward = await this.sess_backward.run(feed_backward);
-            let block_ids = []
-            if (seqlen >= 2 && tri_block_dict.has(`${this.output_tokens[seqlen - 2]},${this.output_tokens[seqlen - 1]}`)) {
-                tri_block_dict.get(`${this.output_tokens[seqlen - 2]},${this.output_tokens[seqlen - 1]}`).forEach((elem) => block_ids.push(elem));
+
+        const initTokens = BigInt64Array.from(([2].concat(tokens)).map(BigInt));
+        const beam = new BeamState(initTokens, feed_forward_init, feed_backward_init, -1000, default_tri_block_dict);
+
+        let beams = [beam];
+
+        const input_len = input_ids_forward.size;
+        const seqlen_init = input_len;
+        if (this.need_position_ids) {
+            beam.feedForward['position_ids'] = new ort.Tensor(
+                'int64',
+                BigInt64Array.from({ length: input_len }, (_, i) => BigInt(seqlen_init - input_len + i)),
+                [1, input_len]
+            );
+            beam.feedBackward['position_ids'] = new ort.Tensor(
+                'int64',
+                BigInt64Array.from({ length: input_len }, (_, i) => BigInt(seqlen_init - input_len + i)),
+                [1, input_len]
+            );
+        }
+        let final_outputs = []
+        while (!this.stop) {
+            let newBeams = [];
+
+            for (const b of beams) {
+                const seqlen = b.tokens.length;
+
+                if (seqlen >= max_tokens) {
+                    continue;
+                }
+
+                b.feedForward['attention_mask'] = new ort.Tensor(
+                    'int64',
+                    BigInt64Array.from({ length: seqlen }, () => 1n),
+                    [1, seqlen]
+                );
+                b.feedBackward['attention_mask'] = new ort.Tensor(
+                    'int64',
+                    BigInt64Array.from({ length: seqlen }, () => 1n),
+                    [1, seqlen]
+                );
+
+                const outputs_forward = await this.sess_forward.run(b.feedForward);
+                const outputs_backward = await this.sess_backward.run(b.feedBackward);
+
+                let block_ids = [];
+                if (seqlen >= 2) {
+                    const key2 = `${b.tokens[seqlen - 2]},${b.tokens[seqlen - 1]}`;
+                    if (b.tri_block_dict.has(key2)) {
+                        block_ids.push(...b.tri_block_dict.get(key2));
+                    }
+                }
+
+                const candidates = this.topKSamplingWithoutReplacement(outputs_forward.logits, outputs_backward.logits, block_ids, beam_size + 1, temperature);
+                for (let c of candidates) {
+                    const newBeam = b.clone();
+                    newBeam.tokens.push(BigInt(c.token));
+                    newBeam.score = newBeam.score + c.score;
+                    if (seqlen >= 2) {
+                        const key2 = `${b.tokens[seqlen - 2]},${b.tokens[seqlen - 1]}`;
+                        if (!newBeam.tri_block_dict.has(key2)) {
+                            newBeam.tri_block_dict.set(key2, [c.token]);
+                        } else {
+                            newBeam.tri_block_dict.get(key2).push(c.token);
+                        }
+                    }
+
+                    this.update_kv_cache(newBeam.feedForward, outputs_forward);
+                    this.update_kv_cache(newBeam.feedBackward, outputs_backward);
+
+                    const newSeqLen = newBeam.tokens.length;
+                    newBeam.feedForward['input_ids'] = new ort.Tensor(
+                        'int64',
+                        BigInt64Array.from(newBeam.tokens),
+                        [1, newSeqLen]
+                    );
+                    newBeam.feedBackward['input_ids'] = new ort.Tensor(
+                        'int64',
+                        BigInt64Array.from([BigInt(5), ...newBeam.tokens.slice(1)]),
+                        [1, newSeqLen]
+                    );
+
+                    if (this.need_position_ids) {
+                        newBeam.feedForward['position_ids'] = new ort.Tensor(
+                            'int64',
+                            BigInt64Array.from({ length: newSeqLen }, (_, i) => BigInt(i)),
+                            [1, newSeqLen]
+                        );
+                        newBeam.feedBackward['position_ids'] = new ort.Tensor(
+                            'int64',
+                            BigInt64Array.from({ length: newSeqLen }, (_, i) => BigInt(i)),
+                            [1, newSeqLen]
+                        );
+                    }
+
+                    newBeams.push(newBeam);
+                }
+
+            }
+            if (newBeams.length === 0) {
+                break;
             }
 
-            last_token = BigInt(this.argmax(outputs_forward.logits, outputs_backward.logits, block_ids));
-            if (seqlen >= 2) {
-                if (tri_block_dict.has(`${this.output_tokens[seqlen - 2]},${this.output_tokens[seqlen - 1]}`)) {
-                    tri_block_dict.get(`${this.output_tokens[seqlen - 2]},${this.output_tokens[seqlen - 1]}`).push(Number(last_token));
-                }
-                else {
-                    tri_block_dict.set(`${this.output_tokens[seqlen - 2]},${this.output_tokens[seqlen - 1]}`, [Number(last_token)]);
-                }
-            }
+            newBeams.sort((a, b) => b.score - a.score);
+            final_outputs.push({ beam: newBeams[0], score: Number(await this.computePerplexityForward([...newBeams[0].tokens, ...[...newBeams[0].tokens].reverse().slice(1)])) });
+            beams = newBeams.slice(0, beam_size);
 
-            this.output_tokens.push(last_token);
             if (callback && !this.profiler) {
-                const temp_output = [...this.output_tokens, ...[...this.output_tokens].reverse().slice(1)];
+                const bestBeam = beams[0];
+                const bestTokens = Array.from(bestBeam.tokens);
+                const temp_output = [...bestTokens, ...bestTokens.reverse().slice(1)];
                 callback(temp_output);
             }
-            this.update_kv_cache(feed_forward, outputs_forward);
-            this.update_kv_cache(feed_backward, outputs_backward);
-            feed_forward['input_ids'] = new ort.Tensor('int64', BigInt64Array.from(this.output_tokens), [1, seqlen + 1]);
-            feed_backward['input_ids'] = new ort.Tensor('int64', BigInt64Array.from([BigInt(5), ...this.output_tokens.slice(1)]), [1, seqlen + 1]);
-            if (this.need_position_ids) {
-                feed_forward['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen + 1 }, (_, i) => BigInt(i)), [1, seqlen + 1]);
-                feed_backward['position_ids'] = new ort.Tensor('int64', BigInt64Array.from({ length: seqlen + 1 }, (_, i) => BigInt(i)), [1, seqlen + 1]);
+
+            if (beams.every(b => b.tokens.length >= max_tokens)) {
+                break;
             }
         }
-        if (this.profiler) {
-            this.sess.endProfiling();
-        }
-        const output = [...this.output_tokens, ...[...this.output_tokens].reverse().slice(1)];
-        console.log(output);
+
+        //beams.sort((a, b) => b.score - a.score);
+        //const bestBeam = beams[0];
+        final_outputs.sort((a, b) => -b.score + a.score);
+        const bestBeam = final_outputs[0].beam;
+        const output = [...bestBeam.tokens, ...[...bestBeam.tokens].reverse().slice(1)];
+
         return output;
     }
 }

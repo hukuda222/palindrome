@@ -8,32 +8,40 @@ export default {
     mode: 'development',
     devtool: 'source-map',
     entry: {
-        'dist/main': './main.js',
-        'dist/main.min': './main.js',
+        'main': './main.js',
+        'main.min': './main.js',
     },
     output: {
         filename: '[name].js',
-        path: __dirname,
+        path: path.resolve(__dirname, 'dist'),
         library: {
             type: 'module',
         },
     },
     plugins: [
-        // Copy .wasm files to dist folder
+        // Copy .wasm files and index.html to dist folder
         new CopyWebpackPlugin({
             patterns: [
                 {
                     from: 'node_modules/onnxruntime-web/dist/*.jsep.*',
-                    to: 'dist/[name][ext]'
+                    to: '[name][ext]', // .wasmファイルをコピー
+                },
+                {
+                    from: './index.html', // プロジェクトのルートにあるindex.htmlをコピー
+                    to: 'index.html', // distディレクトリのルートにコピー
+                },
+                {
+                    from: './main.css', // プロジェクトのルートにあるindex.htmlをコピー
+                    to: 'main.css', // distディレクトリのルートにコピー
                 },
             ],
         }),
     ],
     devServer: {
         static: {
-            directory: __dirname
+            directory: path.resolve(__dirname, 'dist'),
         },
-        port: 8080
+        port: 8080,
     },
     experiments: {
         outputModule: true,

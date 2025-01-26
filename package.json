@@ -6,8 +6,15 @@
   "scripts": {
     "dev": "webpack serve --no-client-overlay",
     "build": "webpack",
-    "lint": "eslint . --ext js  --report-unused-disable-directives"
+    "lint": "eslint . --ext js  --report-unused-disable-directives",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d ./dist"
   },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:hukuda222/palindrome.git"
+  },
+  "homepage": "https://hukuda222.github.io/palindrome",
   "dependencies": {
     "@xenova/transformers": "^2.17.1",
     "copy-webpack-plugin": "^12.0.2",
@@ -16,6 +23,7 @@
     "webpack": "^5.91.0"
   },
   "devDependencies": {
+    "gh-pages": "^6.3.0",
     "webpack-cli": "^5.1.4",
     "webpack-dev-server": "^5.0.4"
   }
