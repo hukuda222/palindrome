@@ -32211,7 +32211,7 @@ async function submitRequest(e) {
   }
   let generate_beam_size = parseInt(document.getElementById('user-input-beam-size').value, 10);
   if (isNaN(generate_beam_size)) {
-    generate_beam_size = 2;
+    generate_beam_size = 10;
   }
   let temperature = parseFloat(document.getElementById('user-input-temp').value, 10);
   if (isNaN(temperature)) {
