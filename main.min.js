@@ -1534,7 +1534,7 @@ class LLM {
                     }
                 }
 
-                const candidates = this.topKSamplingWithoutReplacement(outputs_forward.logits, outputs_backward.logits, block_ids, beam_size, temperature);
+                const candidates = this.topKSamplingWithoutReplacement(outputs_forward.logits, outputs_backward.logits, block_ids, beam_size + 1, temperature);
                 for (let c of candidates) {
                     const newBeam = b.clone();
                     newBeam.tokens.push(BigInt(c.token));
